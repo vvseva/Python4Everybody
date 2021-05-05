@@ -1,0 +1,750 @@
+---
+title: "Maps"
+author: "Suschevskiy Vsevolod"
+date: "5/1/2021"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+# library("googledrive")
+library(leaflet)
+
+library(geosphere)
+
+library(ggridges)
+library(lubridate)
+
+library(fmsb)
+library("dbscan")
+```
+
+
+```{r}
+sf_df = vroom::vroom(c("CNC_San_Francisco_2017.csv",
+                     "CNC_San_Francisco_2018.csv" ,
+                     "CNC_San_Francisco_2019.csv" ,
+                     "CNC_San_Francisco_2020.csv"))
+
+
+sf_2 = vroom::vroom("sf_4_2019.csv")
+
+ch = vroom::vroom("chicago_2019_04.csv")
+
+ln_df = vroom::vroom(c("CNC_London_2018.csv" ,
+                       "CNC_London_2019.csv", 
+                       "CNC_London_2020.csv"))
+
+la_df = vroom::vroom(c("CNC_Los_Angeles_2017.csv" ,
+                       "CNC_Los_Angeles_2018.csv", 
+                       "CNC_Los_Angeles_2019.csv", 
+                       "CNC_Los_Angeles_2020.csv"))
+
+coord_df = vroom::vroom("coord_df.csv")
+
+clust_2 = vroom::vroom("user_clusters_2.csv")
+
+coord_df = coord_df %>% 
+  mutate(dbscan_clust = clust_2$dbscan_clust)
+```
+
+
+1. users with 10 > records
+
+
+```{r}
+coord_df %>% 
+  group_by(user_id) %>% 
+  mutate(n = n()) %>% 
+  arrange(n)
+
+
+coord_df %>% 
+  group_by(user_id) %>% 
+  mutate(n = n()) %>% 
+  ggplot(aes(x = n))+
+  geom_histogram(binwidth = 1)+
+  xlim(0, 500)
+```
+
+
+2. clusters at least 3 observations
+
+```{r}
+coord_df %>% 
+  group_by(user_id, cluster) %>% 
+  mutate(n = n()) %>% 
+  filter(n > 3)
+```
+
+3. draw users with 2-3 clusters
+
+```{r}
+coord_df %>% 
+  select(user_id, cluster) %>% 
+  unique() %>% 
+  count(user_id) %>% 
+  filter(n == 3)
+```
+
+
+```{r}
+
+pal <-
+  colorFactor(c("navy", "red", "orange", "blue"),
+              domain = c("1", "12", "18", "20"))
+
+
+leaflet(data = coord_df %>%
+          filter(user_id %in% c(1, 12, 18 , 20))) %>% addTiles() %>%
+  addCircleMarkers(
+    ~ latitude,
+    ~ longitude,
+    popup = ~ as.character(user_login),
+    label = ~ as.character(d_clust),
+    color = ~ pal(user_id),
+    stroke = FALSE,
+    fillOpacity = 0.5
+  )
+```
+
+
+same distribution over cities
+distance between cluster centres (for 2 clusters)
+
+
+```{r}
+
+# geosphere::distHaversine()
+
+coord_df %>% 
+  group_by(user_id, d_clust) %>%
+  summarise(latitude = mean(latitude),
+            longitude = mean(longitude)) %>%
+  mutate(n = n()) %>%
+  filter(n == 2) %>%
+  group_by(user_id) %>%
+  summarise(dist_segm = geosphere::distVincentyEllipsoid(
+    c(first(latitude), first(longitude)),
+    c(last(latitude) , last(longitude))) / 1000
+    ) %>%
+  ggplot(aes(x = dist_segm)) +
+  geom_histogram()+
+  xlim(0, 51)+
+  xlab("distance in km")+
+  theme_minimal()
+  
+```
+
+
+density plot for each cluster over time
+
+
+```{r}
+coord_df %>% 
+  filter(user_id == 35) %>% 
+  left_join(sf_df, by = "id") %>% 
+  select(time_observed_at, d_clust, id) %>% 
+  mutate(time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+         hour = lubridate::hour(time_observed_at)) %>% 
+  ggplot(aes(x = hour, y = d_clust, group = d_clust))+
+  geom_density_ridges()+
+  theme_minimal()+
+  xlim(0, 24)
+```
+
+```{r}
+# coord_df %>% 
+#   filter(user_id == 12) %>% 
+#   left_join(sf_df, by = "id") %>% 
+#   select(time_observed_at, d_clust, id) %>% 
+#   mutate(time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+#          hour = lubridate::hour(time_observed_at)) %>% 
+#   count(d_clust, hour) -> user_cluster_time
+# 
+# 
+# colors_border=c( rgb(0.2,0.5,0.5,0.9), rgb(0.8,0.2,0.5,0.9) , rgb(0.7,0.5,0.1,0.9) )
+# colors_in=c( rgb(0.2,0.5,0.5,0.4), rgb(0.8,0.2,0.5,0.4) , rgb(0.7,0.5,0.1,0.4) )
+# # 
+# # tibble(hour = rep(1:24, 4), d_clust = c(rep(1 ,24) ,rep(2,24) ,rep(3,24), rep(4,24) )) %>%
+# #   left_join(user_cluster_time) %>%
+#   user_cluster_time %>%
+#   mutate(n = n %>% replace_na(0)) %>%
+#     arrange(-hour) %>% 
+#   filter(d_clust != max(d_clust)) %>% 
+#   pivot_wider(names_from = hour, values_from = n, values_fill = 1) %>% 
+#   column_to_rownames("d_clust") %>% 
+#   radarchart(
+#     axistype=1 , 
+#     #custom polygon
+#     pcol=colors_border , pfcol=colors_in ,
+#     plwd=4 , plty=1,
+#     #custom the grid
+#     cglcol="grey", cglty=1, axislabcol="grey", cglwd=0.8,
+#     #custom labels
+#     vlcex=0.8
+#     )
+```
+
+top cluster vs others
+
+```{r}
+
+```
+
+
+```{r}
+
+
+ pal <-  colorFactor(c("navy", "red", "orange"),
+              domain = c("1", "2", "3"))
+
+
+leaflet(data = coord_df %>%
+          filter(user_id %in% c(12))) %>% addTiles() %>%
+  addCircleMarkers(
+    ~ latitude,
+    ~ longitude,
+    popup = ~ as.character(user_login),
+    label = ~ as.character(d_clust),
+    color = ~ pal(d_clust),
+    stroke = FALSE,
+    fillOpacity = 0.5
+  )
+```
+
+```{r}
+coord_df %>% 
+  filter(user_id == 12) %>% 
+  group_by(user_id, d_clust) %>%
+  summarise(latitude = mean(latitude),
+            longitude = mean(longitude)) %>%
+  ungroup() %>% 
+  mutate(lag_latitude = lag(latitude),
+         lag_longitude = lag(longitude)) %>% 
+  na.omit() %>%
+  rowwise() %>% 
+  mutate(dist_segm = 
+           geosphere::distVincentyEllipsoid(
+    c(latitude, longitude),
+    c(lag_latitude , lag_longitude)
+    )/1000
+    ) %>% 
+  select(d_clust, dist_segm)
+```
+
+
+profiles
+
+user level info average (mode) time hours for clusters
+
+
+```{r}
+
+```
+
+New
+
+filter of users -- people used at least 3 days -- n before n after
+
+```{r}
+
+
+sf_2 %>% 
+  mutate(created_at = ymd_hms(created_at),
+         day = created_at %>% day()) %>% 
+  select(user_login ,day) %>%
+  unique() %>% 
+  group_by(user_login) %>% 
+  summarise(n = n()) %>% 
+  filter(n>=3) %>%
+  arrange(-n) -> active_users_SF
+
+sf_df %>% 
+  filter(user_login == "arnel") %>% 
+  select(time_observed_at)
+
+names(sf_df)
+
+ln_df %>% 
+  mutate(created_at = ymd_hms(created_at),
+         day = created_at %>% day()) %>% 
+  select(user_login ,day) %>%
+  unique() %>% 
+  group_by(user_login) %>% 
+  summarise(n = n()) %>% 
+  filter(n>=3) %>%
+  arrange(-n) -> active_users_LN
+
+la_df %>% 
+  mutate(created_at = ymd_hms(created_at),
+         day = created_at %>% day()) %>% 
+  select(user_login ,day) %>%
+  unique() %>% 
+  group_by(user_login) %>% 
+  summarise(n = n()) %>% 
+  filter(n>=3) %>%
+  arrange(-n) -> active_users_LA
+
+
+ch %>% 
+  mutate(created_at = ymd_hms(created_at),
+         day = created_at %>% day()) %>% 
+  select(user_login ,day) %>%
+  unique() %>% 
+  group_by(user_login) %>% 
+  summarise(n = n()) %>% 
+  filter(n>=3) %>%
+  arrange(-n) -> active_users_ch
+
+sf_df %>% 
+  mutate(created_at = ymd_hms(created_at),
+         day = created_at %>% day()) %>% 
+  select(user_id ,day) %>%
+  unique() %>% 
+  group_by(user_id) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = n))+
+  geom_histogram(binwidth = 1)+
+  theme_minimal()+
+  xlab("unique_days")
+```
+
+
+от трёх уникальных дней всего 1000 человек 100k точек
+из 6000 и 120к
+
+
+```{r}
+coord_df %>% 
+  filter(user_login %in% active_users$user_login) %>%
+  left_join(sf_df %>% select(id, time_observed_at), by = "id") %>% 
+  select(time_observed_at, dbscan_clust, id, user_id) %>% 
+  mutate(dbscan_clust = case_when(
+    dbscan_clust == 0 ~ 0,
+    TRUE ~ 1
+  )) %>% 
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at)
+  ) %>%
+  ggplot(aes(
+    x = hour,
+    fill = dbscan_clust %>% as.factor(),
+    group = dbscan_clust
+  )) +
+  # geom_histogram(aes(y=..count../sum(..count..)), binwidth = 1, alpha = 0.8)+
+  geom_histogram(binwidth = 1, alpha = 0.8)+
+# geom_density(alpha = 0.8)+
+    theme_minimal() +
+  xlim(0, 24)
+```
+
+```{r}
+coord_df %>% 
+  filter(user_login %in% active_users$user_login) %>%
+  left_join(sf_df %>% select(id, time_observed_at, created_time_zone ,time_observed_at), by = "id") %>% 
+  filter(!is.na(time_observed_at)) %>% 
+    # filter(created_time_zone == "America/Los_Angeles") %>% 
+  select(time_observed_at, dbscan_clust, id, user_id) %>% 
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at)
+  ) %>% 
+  select(user_id ,hour) %>% 
+  unique() %>% 
+  count(hour) %>% 
+  arrange(-n) %>% 
+  ggplot(aes(x = hour, y = n))+
+  geom_histogram(stat = "identity", binwidth = 1)+
+  ggtitle("San_FR")
+
+sf_2 %>% 
+  # filter(created_time_zone == "Europe/Amsterdam") %>% 
+  # filter(time_observed_at)
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at)
+  ) %>% 
+  select(user_id ,hour) %>% 
+  unique() %>% 
+  count(hour) %>% 
+  arrange(-n) %>% 
+  ggplot(aes(x = hour, y = n))+
+  geom_histogram(stat = "identity", binwidth = 1)+
+  ggtitle("SF")+
+  ylab("Unique people")
+
+ch %>% 
+  # filter(created_time_zone == "Europe/Amsterdam") %>% 
+  # filter(time_observed_at)
+  filter(user_login %in% active_users_ch$user_login) %>% 
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at)
+  ) %>% 
+  select(user_id ,hour) %>% 
+  unique() %>% 
+  count(hour) %>% 
+  arrange(-n) %>% 
+  ggplot(aes(x = hour, y = n))+
+  geom_histogram(stat = "identity", binwidth = 1)+
+  ggtitle("CH")+
+  ylab("Unique people")
+
+
+ln_df %>% 
+  # filter(created_time_zone == "Europe/Amsterdam") %>% 
+  # filter(time_observed_at)
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at)
+  ) %>% 
+  select(user_id ,hour) %>% 
+  unique() %>% 
+  count(hour) %>% 
+  arrange(-n) %>% 
+  ggplot(aes(x = hour, y = n))+
+  geom_histogram(stat = "identity", binwidth = 1)+
+  ggtitle("London")+
+  ylab("Unique people")
+
+la_df %>% 
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at),
+    wday = lubridate::wday(time_observed_at, label = T)
+  ) %>% 
+  select(user_id ,hour, wday) %>% 
+  unique() %>% 
+  select(-user_id) %>% 
+  mutate(holiday = case_when(
+    wday == "Sun" ~ "hol",
+    wday == "Sat"~"hol",
+    TRUE ~"work"
+  )) %>% 
+  mutate(hour = hour ) %>% 
+  group_by(hour, holiday) %>% 
+  mutate(n = n()) %>% 
+  ggplot(aes(x = hour,fill = holiday))+
+  # geom_bar(stat = "identity", binwidth = 1 ,alpha = 0.9, position = "dodge")+
+  geom_density(alpha = 0.7)+
+  ggtitle("Los Angeles")+
+  ylab("Unique people")
+```
+
+```{r}
+sf_df$created_time_zone %>% as.factor() %>% summary()
+ln_df$created_time_zone %>% as.factor() %>% summary()
+```
+
+
+
+### Hclust with hel_dist by wide users - groups of users with different time patterns
+
+```{r}
+# coord_df %>% 
+#   filter(user_login %in% active_users$user_login) %>%
+
+sf_2 %>% 
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  # left_join(sf_df %>% select(id, time_observed_at), by = "id") %>% 
+  select(time_observed_at, id, user_id) %>% 
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at)
+  ) %>% 
+  select(user_id ,hour) %>%
+  count(user_id ,hour) %>% 
+  na.omit() %>% 
+group_by(user_id) %>% 
+  mutate(n = n/sum(n)) %>% 
+  ungroup() %>% 
+  arrange(hour) %>% 
+  pivot_wider(names_from = hour, values_from = n, values_fill = 0) %>% 
+  column_to_rownames("user_id")->user_hours
+```
+
+```{r}
+# user_hours 
+# 
+# 
+# user_hours
+# library(distrEx)
+# user_hours
+# 
+# 
+# 
+# ?dist
+# ?hclust()
+```
+
+```{r}
+library(data.table)
+
+# convert Habit1 into a data.table
+  setDT(user_hours)
+
+# assign ids instead of working with rownames
+  user_hours[, id := 1:nrow(user_hours)] 
+
+
+# get all possible combinations of id pairs in long format
+  D <- cbind(matrix(rep(1:nrow(user_hours),each=2),nrow=2),combn(1:nrow(user_hours), 2))
+  D <- as.data.table(D)
+  D <- transpose(D)
+  
+  # add to this dataset the probability mass distribution (PMF) of each id V1 and V2
+# this solution dynamically adapts to number of columns in each Habit dataset
+  colnumber <- ncol(user_hours) - 1
+  cols <- paste0('i.',1:colnumber-1) 
+
+  D[user_hours, c(paste0("id1_col",1:colnumber)) := mget(cols ), on=.(V1 = id)]
+  D[user_hours, c(paste0("id2_col",1:colnumber)) := mget(cols ), on=.(V2 = id)]
+```
+
+```{r}
+# change 1st colnames to avoid conflict 
+  names(D)[1:2] <- c('x', 'y')
+
+# [dynamic] calculate hellinger distance
+  D[melt(D, measure = patterns("^id1", "^id2"), value.name = c("v", "f"))[
+  , sqrt(sum(((sqrt( v ) - sqrt( f ))^2)))/sqrt(2), by=.(x,y)], H3 := V1,  on = .(x,y)]
+  
+  D = D %>% select(x, y, H3)
+  
+  D %>% tail()
+```
+
+```{r}
+D %>% pivot_wider(names_from = y, values_from = H3) %>% 
+  column_to_rownames("x") %>% 
+  as.matrix() %>% 
+  Matrix::forceSymmetric(uplo="U") ->D_m
+
+# D_m
+# 
+# hclust(D_m)
+
+?hclust
+
+hc1 <- hclust(as.dist(D_m), method = "ward.D2" )
+hc2 <- hclust(as.dist(D_m), method = "complete" )
+
+plot(hc1)
+plot(hc2)
+```
+
+```{r}
+# ??fviz_nbclust
+# library(factoextra)
+# fviz_nbclust(x = D_m %>% as.matrix(), FUN = hcut, method = "wss")
+
+hc1
+
+cut_1 = cutree(hc1, k = 5)
+cut_2 = cutree(hc2, k = 10)
+
+cut_1 %>% table()
+cut_2 %>% table()
+```
+
+```{r}
+user_hours %>% 
+  mutate(h_clust = cut_1) %>% 
+  # select(-id) %>%
+  pivot_longer(cols = c(0:24), names_to = "hours", values_to = "obs") %>% 
+  filter(obs !=0) %>% 
+  ggplot(aes(x = hours %>% as.numeric(), fill = h_clust %>% as.factor()))+
+  # geom_bar(stat = "identity", position = "dodge")
+  geom_density(alpha = 0.5)+
+  # geom_histogram(alpha = 0.8, binwidth = 1)
+  theme_minimal()+
+  ggtitle("Hell dist + ward" ,"SF new")
+```
+
+
+```{r}
+time_clust_SF <-  tibble(
+  user_id = user_hours %>% rownames() %>% as.numeric(),
+  t_clust = cut_1
+)
+
+time_clust_SF
+```
+
+
+## dbscan
+
+```{r}
+# library("dbscan")
+
+ch %>% 
+  group_by(user_id) %>% 
+  mutate(dbscan_clust = dbscan(
+    data.frame(latitude ,longitude), eps = 0.05, minPts = 4)[["cluster"]]
+    ) ->ch
+
+
+sf_2 %>% 
+  # head(1000) %>% 
+  group_by(user_id) %>% 
+  mutate(dbscan_clust = dbscan(
+    data.frame(latitude ,longitude), eps = 0.05, minPts = 4)[["cluster"]]
+    ) -> sf_2
+
+sf_2$dbscan_clust %>% as.factor() %>% summary()
+```
+
+```{r}
+ch %>% 
+  filter(user_login %in% active_users_ch$user_login) %>% 
+  group_by(user_id) %>% 
+  # filter(dbscan_clust != 0) %>% 
+  count(dbscan_clust) %>% 
+  select(-n) %>% 
+  ggplot(aes(x = dbscan_clust))+
+  geom_bar()+
+  ggtitle("CH")
+
+
+ch %>% 
+  filter(user_login %in% active_users_ch$user_login) %>% 
+  mutate(time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+         hour = lubridate::hour(time_observed_at)) %>% 
+  mutate(clust = case_when(
+    dbscan_clust > 1 ~ as.integer(2),
+    TRUE~ dbscan_clust
+  )) %>% 
+  ggplot(aes(x = hour, y = clust, group = clust %>% as.factor()))+
+  geom_density_ridges()+
+  theme_minimal()+
+  xlim(0, 24)+
+  ggtitle("CH")
+
+
+
+sf_2 %>% 
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  group_by(user_id) %>% 
+  # filter(dbscan_clust != 0) %>% 
+  count(dbscan_clust) %>% 
+  select(-n) %>% 
+  ggplot(aes(x = dbscan_clust))+
+  geom_bar()+
+  ggtitle("SF")
+
+
+sf_2 %>% 
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  mutate(time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+         hour = lubridate::hour(time_observed_at)) %>% 
+  mutate(clust = case_when(
+    dbscan_clust > 1 ~ as.integer(2),
+    TRUE~ dbscan_clust
+  )) %>% 
+  ggplot(aes(x = hour, y = clust, group = clust %>% as.factor()))+
+  geom_density_ridges()+
+  theme_minimal()+
+  xlim(0, 24)+
+  ggtitle("SF")
+```
+
+
+### distance 2
+
+```{r}
+sf_2 %>% 
+  group_by(user_id, dbscan_clust) %>%
+  summarise(latitude = mean(latitude),
+            longitude = mean(longitude)) %>%
+    filter(dbscan_clust != 0) %>% 
+  mutate(n = n()) %>%
+  filter(n == 2) %>%
+  group_by(user_id) %>%
+  summarise(dist_segm = geosphere::distVincentyEllipsoid(
+    c(first(latitude), first(longitude)),
+    c(last(latitude) , last(longitude))) / 1000
+    ) %>%
+  ggplot(aes(x = dist_segm)) +
+  geom_histogram()+
+  xlim(0, 51)+
+  xlab("distance in km")+
+  theme_minimal()+
+  ggtitle("SF 2")
+
+ch %>% 
+  group_by(user_id, dbscan_clust) %>%
+  summarise(latitude = mean(latitude),
+            longitude = mean(longitude)) %>%
+  filter(dbscan_clust != 0) %>% 
+  mutate(n = n()) %>%
+  filter(n == 2) %>%
+  group_by(user_id) %>%
+  summarise(dist_segm = geosphere::distVincentyEllipsoid(
+    c(first(latitude), first(longitude)),
+    c(last(latitude) , last(longitude))) / 1000
+    ) %>%
+  ggplot(aes(x = dist_segm)) +
+  geom_histogram()+
+  xlim(0, 51)+
+  xlab("distance in km")+
+  theme_minimal()+
+  ggtitle("CH")
+```
+
+```{r}
+time_clust_SF
+
+
+sf_2 %>% 
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  group_by(user_id) %>% 
+  summarise(n_d = n_distinct(dbscan_clust)) %>% 
+  filter(n_d %in% c(3, 4)) %>% 
+  left_join(time_clust_SF)
+```
+
+
+```{r}
+
+sf_2 %>%
+  filter(user_id %in% c(477, 714)) %>%
+  mutate(
+    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    hour = lubridate::hour(time_observed_at),
+    day = day(time_observed_at)
+  ) -> data_leaflet
+
+# <img src="https://img.icons8.com/plasticine/100/000000/person-male.png"/>
+
+ pal <-  colorFactor(c("navy", "red", "orange", "black", "blue"),
+              domain = c("1", "2", "3", "477" ,"714"))
+
+pal2 <- colorNumeric(
+  palette = "RdYlBu",
+  domain = data_leaflet$hour
+)
+# ?colorNumeric
+
+leaflet(data = data_leaflet) %>% 
+  addTiles() %>%
+  addCircleMarkers(
+    ~ latitude,
+    ~ longitude,
+    popup = ~ as.character(time_observed_at),
+    label = ~ as.character(user_id),
+    color = ~ pal2(hour),
+    stroke = FALSE,
+    fillOpacity = 0.5,
+    labelOptions = labelOptions(noHide = T ,textOnly = T)
+  ) %>% 
+  addLegend("bottomright", pal = pal2, values = ~hour,
+    title = "Hours",
+    labFormat = labelFormat(prefix = ""),
+    opacity = 1
+  )
+```
+
+
