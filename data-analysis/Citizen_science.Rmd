@@ -359,23 +359,54 @@ coord_df %>%
   geom_histogram(stat = "identity", binwidth = 1)+
   ggtitle("San_FR")
 
+?ymd_hms
 sf_2 %>% 
+  ungroup() %>% 
   # filter(created_time_zone == "Europe/Amsterdam") %>% 
   # filter(time_observed_at)
-  filter(user_login %in% active_users_SF$user_login) %>% 
-  mutate(
-    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
-    hour = lubridate::hour(time_observed_at)
-  ) %>% 
+  filter(!is.na(time_observed_at)) %>% 
+  filter(user_login %in% active_users_SF$user_login) %>%
+  # rowwise() %>% 
+  mutate(time_observed_at = map2(time_observed_at, created_time_zone, ~ymd_hms(.x, tz = .y))) -> sf_2_date 
+  # mutate(
+  #   # time_observed_at = ymd_hms(time_observed_at) %>% 
+  #   #   force_tz(tzone = created_time_zone),
+  #   hour = hour(time_observed_at)
+  # ) 
+
+# sf_2_date$time_observed_at[1] %>% .[[1]]
+sf_2_date %>% 
+  rowwise() %>% 
+  mutate(time_observed_at = time_observed_at %>% .[[1]] ) %>% 
+  mutate(hour = hour(time_observed_at)) -> sf_2_date_2
+
+
+# sf_2_date_2 %>% 
+  sf_2 %>% 
+  # ungroup() %>% 
+    mutate(time_observed_at = time_observed_at %>% 
+             as.POSIXct(tz = "UTC"),
+           hour = hour(time_observed_at)) -> sf_2_date
+  
+  attributes(sf_2_date$time_observed_at)$tzone <- "America/Los_Angeles" 
+  
+  sf_2_date %>% 
+  mutate(hour = hour(time_observed_at)) %>%
   select(user_id ,hour) %>% 
   unique() %>% 
   count(hour) %>% 
-  arrange(-n) %>% 
+  arrange(-hour) %>% 
   ggplot(aes(x = hour, y = n))+
   geom_histogram(stat = "identity", binwidth = 1)+
   ggtitle("SF")+
   ylab("Unique people")
 
+  
+pb.txt <- "2009-06-03 19:30"  
+pb.date <- as.POSIXct(pb.txt, tz="Europe/London")  
+attributes(pb.date)$tzone <- "America/Los_Angeles"  
+pb.date    
+  
 ch %>% 
   # filter(created_time_zone == "Europe/Amsterdam") %>% 
   # filter(time_observed_at)
@@ -558,7 +589,7 @@ user_hours %>%
   filter(obs !=0) %>% 
   ggplot(aes(x = hours %>% as.numeric(), fill = h_clust %>% as.factor()))+
   # geom_bar(stat = "identity", position = "dodge")
-  geom_density(alpha = 0.5)+
+  geom_density(alpha = 0.7)+
   # geom_histogram(alpha = 0.8, binwidth = 1)
   theme_minimal()+
   ggtitle("Hell dist + ward" ,"SF new")
@@ -707,10 +738,13 @@ sf_2 %>%
 ```
 
 
+
 ```{r}
 
 sf_2 %>%
-  filter(user_id %in% c(477, 714)) %>%
+  # filter(user_id %in% c(477)) %>%
+  filter(user_login =="catchang") %>% 
+  # filter(user_id == 2580) %>% 
   mutate(
     time_observed_at = lubridate::ymd_hms(time_observed_at) ,
     hour = lubridate::hour(time_observed_at),
@@ -734,17 +768,18 @@ leaflet(data = data_leaflet) %>%
     ~ latitude,
     ~ longitude,
     popup = ~ as.character(time_observed_at),
-    label = ~ as.character(user_id),
+    label = ~ as.character(day),
     color = ~ pal2(hour),
     stroke = FALSE,
-    fillOpacity = 0.5,
+    fillOpacity = 0.3,
     labelOptions = labelOptions(noHide = T ,textOnly = T)
   ) %>% 
   addLegend("bottomright", pal = pal2, values = ~hour,
     title = "Hours",
     labFormat = labelFormat(prefix = ""),
     opacity = 1
-  )
+  ) %>% 
+  addScaleBar()
 ```
 
 
