@@ -9,6 +9,7 @@ output: html_document
 library(tidyverse)
 # library("googledrive")
 library(leaflet)
+library(tmap)
 
 library(geosphere)
 
@@ -17,6 +18,9 @@ library(lubridate)
 
 library(fmsb)
 library("dbscan")
+library("archetypes")
+
+library(zipcodeR)
 ```
 
 
@@ -117,8 +121,8 @@ distance between cluster centres (for 2 clusters)
 
 # geosphere::distHaversine()
 
-coord_df %>% 
-  group_by(user_id, d_clust) %>%
+sf_2_date %>% 
+  group_by(user_id, dbscan_clust) %>%
   summarise(latitude = mean(latitude),
             longitude = mean(longitude)) %>%
   mutate(n = n()) %>%
@@ -133,6 +137,21 @@ coord_df %>%
   xlim(0, 51)+
   xlab("distance in km")+
   theme_minimal()
+  
+```
+
+```{r}
+sf_2_date %>% 
+  filter(dbscan_clust != 0) %>% 
+  group_by(user_id, dbscan_clust) %>%
+  summarise(latitude = mean(latitude),
+            longitude = mean(longitude)) %>% 
+  group_by(user_id) %>% 
+  summarise(lat_sd = sd(latitude), 
+            lng_sd = sd(longitude)
+            ) %>% 
+  mutate(lat_sd = replace_na(lat_sd, 0),
+         lng_sd = replace_na(lng_sd, 0)) -> lat_long_tcl ## TOCLUST
   
 ```
 
@@ -375,10 +394,10 @@ sf_2 %>%
   # ) 
 
 # sf_2_date$time_observed_at[1] %>% .[[1]]
-sf_2_date %>% 
-  rowwise() %>% 
-  mutate(time_observed_at = time_observed_at %>% .[[1]] ) %>% 
-  mutate(hour = hour(time_observed_at)) -> sf_2_date_2
+# sf_2_date %>% 
+#   rowwise() %>% 
+#   mutate(time_observed_at = time_observed_at %>% .[[1]] ) %>% 
+#   mutate(hour = hour(time_observed_at)) -> sf_2_date_2
 
 
 # sf_2_date_2 %>% 
@@ -478,12 +497,13 @@ ln_df$created_time_zone %>% as.factor() %>% summary()
 # coord_df %>% 
 #   filter(user_login %in% active_users$user_login) %>%
 
-sf_2 %>% 
+# sf_2 %>% 
+  sf_2_date %>% 
   filter(user_login %in% active_users_SF$user_login) %>% 
   # left_join(sf_df %>% select(id, time_observed_at), by = "id") %>% 
   select(time_observed_at, id, user_id) %>% 
   mutate(
-    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    # time_observed_at = lubridate::ymd_hms(time_observed_at) ,
     hour = lubridate::hour(time_observed_at)
   ) %>% 
   select(user_id ,hour) %>%
@@ -494,7 +514,11 @@ group_by(user_id) %>%
   ungroup() %>% 
   arrange(hour) %>% 
   pivot_wider(names_from = hour, values_from = n, values_fill = 0) %>% 
-  column_to_rownames("user_id")->user_hours
+  column_to_rownames("user_id")->user_hours_before_dt
+
+user_hours = user_hours_before_dt
+
+
 ```
 
 ```{r}
@@ -574,14 +598,19 @@ plot(hc2)
 
 hc1
 
-cut_1 = cutree(hc1, k = 5)
-cut_2 = cutree(hc2, k = 10)
+cut_1 = cutree(hc1, h = 3.5)
+cut_2 = cutree(hc2, h = 0.9)
 
 cut_1 %>% table()
 cut_2 %>% table()
 ```
 
 ```{r}
+user_hours_before_dt %>% 
+  mutate(h_clust = cut_1) %>% 
+  rownames_to_column("user_id") %>% 
+  select(user_id, h_clust) -> tcl_time## TOCLUST
+
 user_hours %>% 
   mutate(h_clust = cut_1) %>% 
   # select(-id) %>%
@@ -598,18 +627,113 @@ user_hours %>%
 
 ```{r}
 time_clust_SF <-  tibble(
-  user_id = user_hours %>% rownames() %>% as.numeric(),
+  user_id = user_hours_before_dt %>% rownames() %>% as.numeric(),
   t_clust = cut_1
 )
 
 time_clust_SF
 ```
 
+### silhouette
+
+```{r}
+D_m2 = as.dist(D_m)
+head(D_m2)
+ssi = cluster::silhouette(time_clust_SF$t_clust, D_m2)
+
+summary(ssi)
+
+# plot(ssi)
+time_clust_SF %>% 
+  bind_cols(ssi[,2:3] %>% as_tibble()) %>% 
+  filter(user_id %in% c(3494, 714 ,1628170)) 
+
+
+plot(ssi, main ="Silhouette plot - K-means")
+
+# library(factoextra)
+factoextra::fviz_silhouette(ssi)
+```
+
+
+### week day
+
+```{r}
+
+sf_2_date %>% 
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  # left_join(sf_df %>% select(id, time_observed_at), by = "id") %>% 
+  select(time_observed_at, id, user_id) %>% 
+  mutate(
+    # time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    wday = lubridate::wday(time_observed_at, label = T)
+  ) %>% 
+  select(user_id ,wday) %>%
+  count(user_id ,wday) %>% 
+  na.omit() %>% 
+group_by(user_id) %>% 
+  mutate(n = n/sum(n)) %>% 
+  ungroup() %>% 
+  arrange(wday) %>% 
+  group_by(wday) %>% 
+  summarise(sum = sum(n)) %>% 
+  ggplot(aes(x = wday, y = sum))+
+  geom_bar(stat = "identity")
+
+  sf_2_date %>% 
+  filter(user_login %in% active_users_SF$user_login) %>% 
+  # left_join(sf_df %>% select(id, time_observed_at), by = "id") %>% 
+  select(time_observed_at, id, user_id) %>% 
+  mutate(
+    # time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    wday = lubridate::wday(time_observed_at, label = T)
+  ) %>% 
+  select(user_id ,wday) %>%
+  count(user_id ,wday) %>% 
+  na.omit() %>% 
+group_by(user_id) %>% 
+  mutate(n = n/sum(n)) %>% 
+  ungroup() %>% 
+  arrange(wday) %>% 
+  pivot_wider(names_from = wday, values_from = n, values_fill = 0) %>% 
+  column_to_rownames("user_id")->user_days_before_dt
+  
+  user_days_before_dt
+
+hd_week = textmineR::CalcHellingerDist(user_days_before_dt %>% as.matrix())
+
+hd_week
+```
+
+```{r}
+hc_wday_1 <- hclust(as.dist(hd_week), method = "ward.D2" )
+hc_wday_2 <- hclust(as.dist(hd_week), method = "complete" )
+
+plot(hc_wday_1)
+plot(hc_wday_2)
+
+cut_wday = cutree(hc_wday_2, h = 0.9)
+
+cut_wday %>% table()
+```
+```{r}
+user_days_before_dt %>% 
+  mutate(wday_clust = cut_wday) %>% 
+  # select(-id) %>%
+  pivot_longer(cols = c(0:7), names_to = "wday", values_to = "obs") %>% 
+  filter(obs !=0) %>% 
+  ggplot(aes(x = wday %>% factor(levels = c("Mon", "Tue", "Wed","Thu", "Fri", "Sat", "Sun")), y = obs, fill = wday_clust %>% as.factor()))+
+  geom_bar(stat = "identity", position = "dodge")+
+  theme_minimal()+
+  ggtitle("Hell dist + ward" ,"SF new")
+```
 
 ## dbscan
 
 ```{r}
 # library("dbscan")
+
+?dbscan
 
 ch %>% 
   group_by(user_id) %>% 
@@ -617,13 +741,19 @@ ch %>%
     data.frame(latitude ,longitude), eps = 0.05, minPts = 4)[["cluster"]]
     ) ->ch
 
-
-sf_2 %>% 
+sf_2_date %>% 
   # head(1000) %>% 
   group_by(user_id) %>% 
   mutate(dbscan_clust = dbscan(
     data.frame(latitude ,longitude), eps = 0.05, minPts = 4)[["cluster"]]
-    ) -> sf_2
+    ) %>% 
+  inner_join(sf_4_coords %>% select(id, hdbscan_clust), by = "id")-> sf_2_date
+
+# sf_2 %>% 
+#   filter(user_id == 3494) %>% 
+#   mutate(hdbscan_clust = hdbscan(
+#     data.frame(latitude ,longitude),  minPts = 4)[["cluster"]]
+#     )
 
 sf_2$dbscan_clust %>% as.factor() %>% summary()
 ```
@@ -741,12 +871,15 @@ sf_2 %>%
 
 ```{r}
 
-sf_2 %>%
-  # filter(user_id %in% c(477)) %>%
-  filter(user_login =="catchang") %>% 
-  # filter(user_id == 2580) %>% 
+# sf_2 %>%
+  sf_2_date %>% 
+  filter(user_id %in% c(3494)) %>%
+  # filter(user_id %in% c(714)) %>%
+  # filter(user_id %in% c(1628170)) %>%
+  # filter(user_login =="catchang") %>%
+  # filter(user_id == 2580) %>%
   mutate(
-    time_observed_at = lubridate::ymd_hms(time_observed_at) ,
+    # time_observed_at = lubridate::ymd_hms(time_observed_at) ,
     hour = lubridate::hour(time_observed_at),
     day = day(time_observed_at)
   ) -> data_leaflet
@@ -758,7 +891,8 @@ sf_2 %>%
 
 pal2 <- colorNumeric(
   palette = "RdYlBu",
-  domain = data_leaflet$hour
+  # domain = data_leaflet$hour
+  domain = data_leaflet$dbscan_clust
 )
 # ?colorNumeric
 
@@ -768,18 +902,568 @@ leaflet(data = data_leaflet) %>%
     ~ latitude,
     ~ longitude,
     popup = ~ as.character(time_observed_at),
-    label = ~ as.character(day),
-    color = ~ pal2(hour),
+    label = ~ as.character(dbscan_clust),
+    color = ~ pal2(dbscan_clust),
     stroke = FALSE,
-    fillOpacity = 0.3,
+    fillOpacity = 0.5,
     labelOptions = labelOptions(noHide = T ,textOnly = T)
   ) %>% 
   addLegend("bottomright", pal = pal2, values = ~hour,
-    title = "Hours",
+    title = "clust",
     labFormat = labelFormat(prefix = ""),
     opacity = 1
   ) %>% 
   addScaleBar()
 ```
 
+## archetypes 
+
+```{r}
+n_t = 5
+a <- archetypes(user_hours_before_dt, n_t, verbose = TRUE)
+```
+
+```{r}
+?archetypes
+
+parameters(a) %>% 
+  as_tibble() %>% 
+  mutate(type = c(1:n_t) %>% as.character())%>% 
+  pivot_longer(cols = c(0:24), names_to = "hour", values_to = "share") -> a_draw
+a_draw%>% 
+    # filter(share !=0) %>% 
+  ggplot(aes(x = hour %>% as.numeric(), 
+             y = share,
+             fill = type %>% as.factor()
+             )
+         )+
+  geom_bar(stat = "identity", position = "dodge")+
+  # geom_density_ridges(stat = "binline", bins = 24, 
+  #                     scale = 0.95, draw_baseline = FALSE)+
+  # geom_density(alpha = 0.5)+
+  # geom_histogram(alpha = 0.8, binwidth = 1)
+  theme_minimal()+
+  ggtitle("archetypes by time" ,"SF new")
+```
+
+```{r}
+coef(a, 'alphas') %>%
+  as_tibble() %>%
+  mutate(user_id = user_hours_before_dt %>% rownames() %>% as.numeric(),
+         t_clust = cut_1) %>% 
+  filter(user_id %in% c(1628170 ,3494 ,714))
+ # apply(coef(a, 'alphas'), 2, range)
+```
+
+### ZIPcodes
+
+
+```{r}
+?search_abb
+
+
+search_state('CA') %>% 
+  filter(major_city == "San Francisco")
+
+sf_2_date %>%
+  select(latitude, longitude, id) %>%
+  mutate(lng = latitude %>% round(2),
+         lat = longitude %>% round(2)) %>%
+  left_join(
+    search_state('CA') %>%
+      mutate(
+        lat = lat %>% round(2),
+        lng = lng %>% round(2)
+      ) ,
+    by = c("lat", "lng")
+  ) %>% na.omit()
+  
+```
+
+```{r}
+leaflet(data = search_state('CA') ) %>% 
+  addTiles() %>%
+  addCircleMarkers(
+    ~ lng,
+        ~ lat,
+    popup = ~ as.character(zipcode),
+    label = ~ as.character(zipcode),
+    # color = ~ pal2(dbscan_clust),
+    stroke = FALSE,
+    fillOpacity = 0.5,
+    labelOptions = labelOptions(noHide = T ,textOnly = T)
+  ) %>% 
+  # addLegend("bottomright", pal = pal2, values = ~hour,
+  #   title = "clust",
+  #   labFormat = labelFormat(prefix = ""),
+  #   opacity = 1
+  # ) %>% 
+  addScaleBar()
+```
+
+
+### knn
+
+
+```{r}
+##run knn function
+
+train_knn = search_state('CA') %>% 
+  # filter(major_city == "San Francisco") %>% 
+    select(lng ,lat ,zipcode) %>% na.omit()
+
+test_knn = sf_2_date %>%
+    ungroup() %>% 
+      select(latitude, longitude) %>%
+  mutate(lng = latitude %>% round(2),
+         lat = longitude %>% round(2)) %>% 
+  select(lng ,lat)
+
+pr <- class::knn(train = train_knn %>% select(lng ,lat)
+  ,test = test_knn
+    ,cl= train_knn$zipcode
+    ,k=1)
+
+summary(pr)
+
+tibble(zipcode = pr) %>% 
+  count(zipcode, sort = T)
+```
+
+```{r}
+sf_2_date %>% 
+  ungroup() %>% 
+  mutate(zipcode = pr) %>% 
+  left_join(search_state('CA') %>% 
+              select(zipcode, major_city ,county),
+            by = "zipcode") %>% 
+  group_by(user_id ,major_city) %>% 
+  mutate(major_city_n = n()) %>% 
+  ungroup() %>% 
+  group_by(user_id) %>% 
+  mutate(top_city = major_city_n == max(major_city_n)) -> sf_2_city
+
+
+sf_2_city %>% 
+  group_by(user_id ,top_city) %>% 
+  summarise(major_city_freq = n()) %>% 
+  mutate(major_city_freq = major_city_freq/sum(major_city_freq)) %>% 
+  filter(top_city == T) %>% 
+  ungroup() -> tcl_major_city ## TOCLUST
+
+sf_2_city$top_city %>% summary()
+
+sf_2_city %>% 
+  ungroup() %>% 
+  count(place_guess ,sort = T)
+```
+
+### parks
+
+```{r}
+
+library(rvest)
+
+wiki_parks_la = read_html("https://en.wikipedia.org/wiki/List_of_parks_in_Los_Angeles")
+
+wiki_parks_la %>% html_element(".wikitable") %>% html_table()
+
+wiki_parks_sf = read_html("https://en.wikipedia.org/wiki/List_of_parks_in_San_Francisco")
+
+wiki_parks_sf %>% html_elements(".div-col a , p+ ul a") %>% html_text()
+wiki_parks_sf %>% html_elements(".div-col a , p+ ul a") %>% html_attr("href")
+
+
+wiki_parks_ca = read_html("https://en.wikipedia.org/wiki/List_of_California_state_parks")
+
+# wiki_parks_ca %>% 
+#   html_element(".wikitable") %>% 
+#   html_table() -> wiki_parks_ca_table
+# 
+# # wiki_parks_ca %>% html_nodes("td:nth-child(1) a") %>% html_attr("href")
+# 
+# wiki_parks_ca_table %>%
+#   mutate(
+#     href = wiki_parks_ca %>% html_nodes("td:nth-child(1)") %>% 
+#       html_children() %>% 
+#       html_attr("href") %>% 
+#       head(nrow(wiki_parks_ca_table))
+#   )
+
+
+
+wiki_parks_ca_table = tibble(
+  href = wiki_parks_ca %>% 
+  html_nodes("td:nth-child(1)") %>% 
+      html_children() %>% 
+      html_attr("href") ,
+  title = wiki_parks_ca %>% 
+  html_nodes("td:nth-child(1)") %>% 
+      html_children() %>% 
+  html_attr( "title")
+)
+
+library(tidytext)
+
+wiki_parks_ca_table %>% 
+  unnest_tokens(output = words, input = title) %>% 
+  count(words, sort = T)
+
+sf_2_date %>% 
+  ungroup() %>% 
+    unnest_tokens(output = words, input = place_guess) %>% 
+  count(words, sort = T)
+
+park_words <- c("park" ,"lake" , "recreation area" ,"river" ,"lake", "beach", "rec. area", "point reyes", "garden")
+
+mountain_words = c("mountain", "preserve" , "ridge" ,"valley" ,"canyon")
+
+trail_words = c("trail")
+
+road_words = c("ave" ," rd " ,"way", "street", "avenue")
+```
+
+```{r}
+sf_2_date %>%
+  ungroup() %>%
+  mutate(
+    place_guess_lower = place_guess %>% str_to_lower(),
+    is_park = place_guess_lower %>%
+      str_detect(str_c(park_words, collapse = "|")),
+    is_mountain = place_guess_lower %>%
+      str_detect(str_c(mountain_words, collapse = "|")),
+    is_road = place_guess_lower %>%
+      str_detect(str_c(road_words, collapse = "|")),
+    is_trail = place_guess_lower %>%
+      str_detect(str_c(trail_words, collapse = "|"))
+  ) -> sf_2_locs
+
+sf_2_locs$is_park %>% summary()
+
+sf_2_locs$is_road %>% summary()
+
+
+sf_2_locs %>%
+  # filter(is_park == F) %>%
+  filter(is_road == T) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~ latitude,
+    ~ longitude,
+    popup = ~ as.character(place_guess),
+    # label = ~ as.character(zipcode),
+    # color = ~ pal2(dbscan_clust),
+    stroke = FALSE,
+    fillOpacity = 0.1,
+    # labelOptions = labelOptions(noHide = T ,textOnly = T)
+  ) %>%
+  # addLegend("bottomright", pal = pal2, values = ~hour,
+  #   title = "clust",
+  #   labFormat = labelFormat(prefix = ""),
+  #   opacity = 1
+  # ) %>%
+  addScaleBar()
+
+```
+
+```{r}
+sf_2_locs %>% 
+  group_by(user_id ,is_park) %>% 
+  summarise(park_freq = n()) %>% 
+  mutate(park_freq = park_freq/sum(park_freq)) %>% 
+  filter(is_park == TRUE) -> tcl_parks ## TOCLUST
+
+
+sf_2_locs %>% 
+  group_by(user_id ,is_mountain) %>% 
+  summarise(mountain_freq = n()) %>% 
+  mutate(mountain_freq = mountain_freq/sum(mountain_freq)) %>% 
+  filter(is_mountain == TRUE) -> tcl_mountains ## TOCLUST
+```
+
+
+### non parks
+
+```{r}
+# sf_2_locs %>%
+#   filter(is_park == T) %>% 
+#   summarise(max_lat = max(latitude),
+#             min_lat = min(latitude),
+#             max_lng = max(longitude),
+#             min_lng = min(longitude))
+
+# lat_c = seq(-123.5303 ,-121.3713, by = 0.0001)
+# lng_c = seq(37.0043 ,38.8620, by = 0.0001)
+# 
+# grid = crossing(lat_c, lng_c)
+# 
+# grid %>% 
+#   filter(lat_c == "-122.3651")
+# 
+# grid %>% 
+#   left_join(
+# sf_2_locs %>%
+#   filter(is_park == T) %>% 
+#   mutate(lat_c = latitude %>% round(4),
+#          lng_c = longitude %>% round(4)) %>% 
+#   select(lat_c, lng_c, is_park) %>% head(),
+# by = c("lat_c" ,"lng_c")
+# ) -> grid_parks
+# 
+# 
+# grid_parks %>% 
+#   na.omit()
+
+
+# grid %>%
+#   leaflet() %>%
+#   addTiles() %>%
+#   addCircleMarkers(
+#     ~ lat_c,
+#     ~ lng_c,
+#     stroke = FALSE,
+#     fillOpacity = 0.1
+#   ) %>%
+#   addScaleBar()
+```
+
+
+```{r}
+
+```
+
+### basic metrics from M. Aristeidou et al. / Computers in Human Behavior 74 (2017) 246e256
+
+#### active days
+
+```{r}
+sf_2_date %>%  
+    summarise( day = date %>% day()) %>% 
+  unique() %>% 
+  count() -> tcl_active## TOCLUST
+```
+
+#### Lurking days -- non observable
+
+```{r}
+sf_2_date %>%  
+    summarise(d_dif = difftime(max(date), min(date) ,units = "days") %>% as.numeric()) 
+  
+```
+
+#### Relative activity duration
+
+```{r}
+sf_2_date %>%  
+    summarise(d_dif = difftime(max(date), min(date) ,units = "days") %>% as.numeric() %>% ceiling()) %>% 
+  left_join(
+sf_2_date %>%  
+    summarise( day = date %>% day()) %>% 
+  unique() %>% 
+  count() 
+) %>% 
+  mutate(relative_activity = n/d_dif) -> tcl_relative_activity ## TOCLUST
+
+tcl_relative_activity
+```
+
+#### Variation in periodicity -- too spare
+
+```{r}
+sf_2_date %>%  
+    summarise( day = date %>% day()) %>% 
+  unique() %>% 
+  mutate(consecutive = case_when(
+    day + 1 == lead(day) ~ TRUE,
+    T ~ FALSE
+  )) %>% 
+  mutate(consecutive = case_when(
+    lag(consecutive) == TRUE ~ TRUE,
+    TRUE ~ consecutive
+  )) %>% 
+ group_by(user_id,grp = with(rle(consecutive), rep(seq_along(lengths), lengths))) %>%
+ mutate(Counter = 1:n()) %>%
+ ungroup() %>%
+ select(-grp) %>%
+  group_by(user_id) %>% 
+  filter(consecutive != FALSE) %>% 
+  mutate(
+    vip = case_when(
+      Counter == 1 ~ (day - lag(day)) %>% as.numeric(),
+      TRUE ~ 0
+    )
+  ) %>% 
+  na.omit() %>% 
+  filter(vip != 0) %>% 
+  summarise(vip_sd = sd(vip), vip = mean(vip))
+```
+
+
+
+#### Daily devoted time
+
+```{r}
+sf_2_date %>%  
+  count(user_id ,day, hour) %>% 
+  group_by(user_id, day) %>% 
+  summarise(hours_a_day = n()) %>% 
+  group_by(user_id) %>% 
+  summarise(ddt = mean(hours_a_day), 
+            ddt_sd = sd(hours_a_day)) -> tcl_ddt ### TOCLUST
+
+
+```
+
+### Clustering
+
+
+```{r}
+lat_long_tcl
+tcl_time
+tcl_major_city
+tcl_mountains
+tcl_parks
+tcl_ddt
+# tcl_lurking
+# tcl_lurking_ratio
+# tcl_active
+
+data_to_clust <- 
+  lat_long_tcl %>% 
+  mutate(dist_sd = lat_sd+lng_sd) %>% 
+  select(-lat_sd ,-lng_sd) %>% 
+  full_join(tcl_time %>% mutate(user_id = user_id %>% as.numeric()), by = "user_id") %>% 
+  full_join(tcl_major_city %>% select(-top_city), by = "user_id") %>% 
+  full_join(tcl_mountains %>% select(-is_mountain) ,by = "user_id") %>% 
+  full_join(tcl_parks %>% select(-is_park), by = "user_id") %>% 
+  full_join(tcl_ddt, by = "user_id") %>% 
+  # full_join(tcl_lurking, by = "user_id") %>% 
+  full_join(tcl_relative_activity ,by = "user_id") %>% 
+  # full_join(tcl_active ,by = "user_id") %>% 
+  mutate(mountain_freq = mountain_freq %>%  replace_na(0),
+         park_freq = park_freq %>%  replace_na(0), 
+         major_city_freq = major_city_freq %>%  replace_na(0),
+         ddt_sd = ddt_sd %>% replace_na(0)) %>% 
+  rename(days = n)
+
+data_to_clust %>% 
+  filter(dist_sd != 0) %>% 
+  mutate(h_clust = h_clust %>% replace_na(0) %>% as.factor()) -> data_to_clust 
+  
+```
+
+```{r}
+library(recipes)
+
+data_to_clust_scaled <- data_to_clust %>% 
+  recipe(user_id ~ .,) %>%
+  step_dummy(h_clust,
+             one_hot = TRUE)  %>% 
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors()) %>% 
+  prep() %>% 
+  bake(data_to_clust)
+
+data_to_clust_scaled = data_to_clust_scaled %>% 
+                    column_to_rownames("user_id")
+```
+
+```{r}
+library(useful)
+
+# ?FitKMeans
+k_fit = FitKMeans(data_to_clust_scaled, max.clusters=30, nstart=25, seed=123)
+
+PlotHartigan(k_fit)
+
+
+k_6 = kmeans(data_to_clust_scaled, centers = 6)
+k_6$cluster
+```
+
+```{r}
+library(cluster)
+
+theGap <- clusGap(data_to_clust_scaled, FUNcluster=pam, K.max=20) 
+
+gapDF <- as.data.frame(theGap$Tab) 
+gapDF
+```
+
+```{r}
+ # logW curves
+ggplot(gapDF, aes(x=1:nrow(gapDF))) +
+   geom_line(aes(y=logW), color="blue") +
+   geom_point(aes(y=logW), color="blue") +
+   geom_line(aes(y=E.logW), color="green") +
+   geom_point(aes(y=E.logW), color="green") +
+   labs(x="Number of Clusters") 
+
+# gap curve
+ggplot(gapDF, aes(x=1:nrow(gapDF))) +
+   geom_line(aes(y=gap), color="red") +
+   geom_point(aes(y=gap), color="red") +
+   geom_errorbar(aes(ymin=gap-SE.sim, ymax=gap+SE.sim), color="red") +
+   labs(x="Number of Clusters", y="Gap")
+```
+
+
+```{r}
+wbPam <- pam(x=data_to_clust_scaled, k=6, keep.diss=TRUE, keep.data=TRUE)
+# show the medoid observations
+wbPam$medoids
+```
+
+```{r}
+plot(wbPam, which.plots=2, main="")
+```
+
+```{r}
+hclust_1 = hclust(d=dist(data_to_clust_scaled))
+
+plot(hclust_1)
+```
+
+
+```{r}
+cut_6 = cutree(hclust_1, k = 6)
+
+table(cut_6)
+```
+
+```{r}
+
+
+data_to_clust %>% 
+  mutate(final_cluster_h = cut_6 %>% enframe() %>% .$value) -> data_clustered
+  # mutate(final_cluster_k = k_6$cluster) -> data_clustered
+```
+
+```{r}
+library(skimr)
+
+data_clustered %>%
+  group_by(final_cluster_k) %>%
+  skim()
+```
+
+```{r}
+library(gt)
+library(gtsummary)
+
+data_clustered %>% 
+  gtsummary::tbl_summary(by = final_cluster_k) %>% 
+  as_gt() %>% 
+  gtsave(filename = "clusters_k.html")
+
+
+data_clustered %>% 
+  gtsummary::tbl_summary(by = final_cluster_h) %>% 
+  as_gt() %>% 
+  gtsave(filename = "clusters_h.html")
+
+
+# final_cluster_h
+```
 
